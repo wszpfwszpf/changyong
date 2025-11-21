@@ -1,0 +1,92 @@
+import os
+import numpy as np
+import dv_processing as dv
+
+
+def load_events_from_aedat4(path):
+    """
+    使用 dv_processing.io.MonoCameraRecording 读取 aedat4 中的 events。
+    返回: events (N, 4) [t, x, y, p]，t 为微秒 (int64)。
+    """
+    reader = dv.io.MonoCameraRecording(path)
+    chunks = []
+
+    while reader.isRunning():
+        batch = reader.getNextEventBatch()
+        if batch is None:
+            continue
+
+        # 优先尝试 numpy()（结构化数组）
+        try:
+            arr = batch.numpy()
+            names = arr.dtype.names
+            if names is None:
+                raise AttributeError
+
+            t = arr["timestamp"].astype(np.int64)
+            x = arr["x"].astype(np.int16)
+            y = arr["y"].astype(np.int16)
+            p = arr["polarity"].astype(np.int8)
+
+        except AttributeError:
+            # fallback：用 getter
+            t = batch.getTimestamps().astype(np.int64)
+            x = batch.getX().astype(np.int16)
+            y = batch.getY().astype(np.int16)
+            p = batch.getPolarities().astype(np.int8)
+
+        if t.size == 0:
+            continue
+
+        chunk = np.column_stack([t, x, y, p])
+        chunks.append(chunk)
+
+    if len(chunks) == 0:
+        print(f"[WARN] {path} 中 events 为空。")
+        return None
+
+    events = np.concatenate(chunks, axis=0)
+
+    # 按时间排序保险
+    order = np.argsort(events[:, 0])
+    events = events[order]
+
+    return events
+
+
+def convert_aedat4_folder_to_npy(input_folder, output_folder):
+    os.makedirs(output_folder, exist_ok=True)
+
+    aedat_files = [f for f in os.listdir(input_folder) if f.endswith(".aedat4")]
+    aedat_files.sort()
+
+    print(f"[INFO] 共找到 {len(aedat_files)} 个 aedat4 文件。")
+
+    for fname in aedat_files:
+        in_path = os.path.join(input_folder, fname)
+        out_path = os.path.join(output_folder, fname.replace(".aedat4", ".npy"))
+
+        print(f"\n===== 正在处理: {fname} =====")
+
+        events = load_events_from_aedat4(in_path)
+        if events is None:
+            print(f"[WARN] {fname} 无事件，跳过。")
+            continue
+
+        # 时间戳归一化到从 0 开始
+        events[:, 0] -= events[0, 0]
+
+        np.save(out_path, events)
+        print(f"[OK] 保存成功: {out_path} | 事件数量: {events.shape[0]}")
+
+
+if __name__ == "__main__":
+    # 把这两个路径改成你自己的
+
+    input_folder = "daylight"  # 改成你的输入目录
+    output_folder = "converted_npy"  # 改成你的输出目录
+    convert_aedat4_folder_to_npy(input_folder, output_folder)
+
+
+
+
